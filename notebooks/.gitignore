@@ -1,6 +1,10 @@
 .env
 data/raw
-data/lake
-__pycache__/
+data/raw/*
+!data/raw/.gitkeep
+data/noisy/*
+!data/noisy/.gitkeep
+data/lake/*
+!data/lake/.gitkeep__pycache__/
 *.pyc
 .ipynb_checkpoints/
