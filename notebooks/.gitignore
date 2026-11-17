@@ -7,4 +7,5 @@ data/noisy/*
 data/lake/*
 !data/lake/.gitkeep__pycache__/
 *.pyc
-.ipynb_checkpoints/
+.ipynb_checkpoints/\
+venv/
