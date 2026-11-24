@@ -1,7 +1,7 @@
 # Hợp đồng giao diện (Interface Contract)
 
 Dự án: **Dự báo mực nước và nguy cơ ngập lụt từ dữ liệu cảm biến IoT**
-Phiên bản: **v0.2** · Người duy trì: **Thành viên 1**
+Phiên bản: **v0.3**
 
 Tài liệu này quy định dữ liệu trao đổi giữa các thành phần của hệ thống và giữa các thành viên. Mọi thay đổi phải được cập nhật vào đây và thông báo cho cả nhóm **trước khi** sửa code.
 
@@ -17,7 +17,7 @@ Trạng thái mỗi mục:
 | Quy ước | Nội dung |
 |---|---|
 | Thời gian | Theo **UTC**, chuẩn **ISO 8601**: `2022-08-15T00:00:00Z`; có mili giây khi cần: `2026-11-17T04:10:05.123Z`. Trong PostgreSQL dùng kiểu `TIMESTAMPTZ`, múi giờ máy chủ `UTC` |
-| Tên cột / trường | Theo định dạng `snake_case`, đơn vị đặt ở cuối: `_mm`, `_m`, `_percent`, `_ms` |
+| Tên cột / trường | Theo định dạng `snake_case`, đơn vị đặt ở cuối: `_mm`, `_m`, `_percent`, `_ms`. **Không** đặt tên trùng từ khóa SQL (`offset`, `partition`, `timestamp`, `key`…); cột lấy từ metadata Kafka thêm tiền tố `kafka_` (`kafka_key`, `kafka_partition`, `kafka_offset`, `kafka_timestamp`) |
 | Giá trị thiếu | Luôn là `null`. **Không** dùng `-999`, `NaN`, chuỗi rỗng hay giá trị giả khác |
 | Số thực | `double` (PostgreSQL: `DOUBLE PRECISION`), dấu chấm thập phân (`41.2`) |
 | Mã trạm | Giữ nguyên `station_id` của dữ liệu gốc, ví dụ `ASIA_0009` |
@@ -38,7 +38,11 @@ Toàn bộ hạ tầng khởi chạy bằng `docker compose up -d` từ thư m�
 | Kafka UI | `provectuslabs/kafka-ui:v0.7.2` |
 | PostgreSQL | `postgres:16` |
 | Python (môi trường ảo của dự án) | **3.11** (PySpark 3.5 chưa hỗ trợ Python mới hơn) |
-| Spark, Grafana | ⏳ Bổ sung khi dựng (bước 4, 5) |
+| Spark (standalone: 1 master + 1 worker) | Image riêng `floodprediction/spark:3.5.3`, build từ `apache/spark:3.5.3-scala2.12-java17-python3-ubuntu` (`infra/spark/Dockerfile`) |
+| Python **bên trong** image Spark | 3.10 |
+| Thư viện Python trong image Spark | `numpy==1.26.4`, `pandas==2.2.3`, `pyarrow==17.0.0`, `psycopg2-binary==2.9.9`, `pyyaml==6.0.2` |
+| Connector của Spark (tải qua `spark.jars.packages`) | `org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3`, `org.postgresql:postgresql:42.7.4` |
+| Grafana | ⏳ Bổ sung khi dựng (bước 5) |
 
 ### 2.2. Địa chỉ kết nối
 
@@ -49,6 +53,9 @@ Chương trình **trong** mạng Docker (Spark, Grafana…) và chương trình 
 | Kafka | `kafka:9092` (listener INTERNAL) | `localhost:9094` (listener EXTERNAL) |
 | PostgreSQL | `postgres:5432` | `localhost:${POSTGRES_HOST_PORT}` (mặc định `5433`) |
 | Kafka UI | — | http://localhost:8085 |
+| Spark master | `spark://spark-master:7077` | Giao diện cụm: http://localhost:8080 |
+| Spark worker | — | Giao diện worker: http://localhost:8081 |
+| Ứng dụng Spark đang chạy (driver) | — | http://localhost:4040 (chỉ có khi đang có job; có tab Structured Streaming) |
 
 ### 2.3. Biến môi trường (`.env`)
 
@@ -57,6 +64,35 @@ Chương trình **trong** mạng Docker (Spark, Grafana…) và chương trình 
 | `KAFKA_CLUSTER_ID` | Mã định danh cụm Kafka (sinh bằng `kafka-storage.sh random-uuid`) |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Tài khoản và tên database |
 | `POSTGRES_HOST_PORT` | Cổng PostgreSQL mở ra máy; đổi nếu cổng mặc định đã bị chiếm |
+
+Các biến `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` cũng được truyền vào container `spark-master` để job Spark đọc bằng `os.environ[...]`. **Không viết mật khẩu trong code.**
+
+### 2.4. Quy tắc chạy job Spark ✅
+
+- **Mọi job Spark chạy bên trong container**, gửi từ `spark-master`:
+  `docker exec [-it] spark-master /opt/spark/bin/spark-submit /opt/app/<thư-mục>/<file>.py`
+  Không chạy PySpark từ Python trên Windows: driver và executor phải dùng **cùng phiên bản Python** (3.10 trong image).
+- Dùng `-it` khi script cần nhập từ bàn phím (`input()`) hoặc khi cần dừng job streaming bằng `Ctrl+C`.
+- **Đường dẫn trong job là đường dẫn bên trong container:**
+
+| Trên máy | Trong container Spark (master và worker) |
+|---|---|
+| `./streaming` | `/opt/app/streaming` |
+| `./common` | `/opt/app/common` |
+| `./data` | `/opt/app/data` |
+
+- **Cấu hình mặc định** đặt trong `infra/spark/spark-defaults.conf` (nằm trong image; sửa xong phải `docker compose build`):
+
+| Cấu hình | Giá trị |
+|---|---|
+| `spark.master` | `spark://spark-master:7077` (không cần gõ `--master`) |
+| `spark.jars.packages` | Hai connector ở mục 2.1 |
+| `spark.jars.ivy` | `/tmp/.ivy2` (volume `spark_ivy`, lưu đệm thư viện đã tải) |
+| `spark.sql.session.timeZone` | `UTC` |
+| `spark.cores.max` | ⏳ Đề xuất `1`: mỗi ứng dụng tối đa 1 nhân để nhiều job chạy song song được; job streaming chính ghi đè bằng `--conf spark.cores.max=2` khi cần (xem mục 10) |
+
+- Mỗi job gọi `spark.sparkContext.setLogLevel("WARN")` sau khi tạo SparkSession.
+- **Job streaming:** mỗi job có thư mục checkpoint riêng `data/lake/_checkpoints/<tên-job>/`. Offset đã đọc từ Kafka lưu trong checkpoint, không lưu ở consumer group. Xóa checkpoint làm job đọc lại từ đầu topic và **ghi trùng** nếu đích không ghi idempotent: chỉ xóa khi chủ động muốn xử lý lại.
 
 ---
 
@@ -263,7 +299,9 @@ Ghi chú về cột:
 | `data/lake/bronze/` | Bản tin thô từ Kafka | Parquet, partition theo `basin` |
 | `data/lake/silver/` | Dữ liệu đã lọc Kalman + cờ lỗi | Parquet, partition theo `basin` |
 | `data/lake/gold/` | Dự báo, cảnh báo | Parquet, partition theo `basin` |
+| `data/lake/_checkpoints/<tên-job>/` | Checkpoint của từng job Spark Streaming (offset đã xử lý) | Do Spark quản lý |
 | `infra/postgres/init/` | Script SQL khởi tạo database | SQL |
+| `infra/spark/` | `Dockerfile` và `spark-defaults.conf` của image Spark | Dockerfile, properties |
 | `common/schemas/` | Schema máy đọc được của các topic | JSON Schema |
 
 Thư mục `data/` không đưa lên Git; mỗi thành viên tự đặt file gốc và tự sinh lại dữ liệu nhiễu nhờ seed cố định.
@@ -279,7 +317,8 @@ Thư mục `data/` không đưa lên Git; mỗi thành viên tự đặt file g�
 | 3 | Schema chi tiết topic `flood-alerts` (mục 4.1) | TV3 | Mốc 3 |
 | 4 | Định dạng file `stations_clean.csv`; sau đó TV1 viết `infra/postgres/init/02_seed_stations.sql` để nạp tự động | TV2 → TV1 | Mốc 1 |
 | 5 | File `common/schemas/sensor_raw.v1.json` (mục 3.1) | TV1 | Bước Producer |
-| 6 | Phiên bản và điểm kết nối Spark, Grafana (mục 2) | TV1 | Bước 4, 5 |
+| 6 | Phiên bản và điểm kết nối Grafana (mục 2) | TV1 | Bước 5 |
+| 7 | Áp dụng `spark.cores.max` (mục 2.4) và số nhân cho job streaming chính | TV1 | Bước 8 |
 
 ---
 
@@ -289,3 +328,4 @@ Thư mục `data/` không đưa lên Git; mỗi thành viên tự đặt file g�
 |---|---|---|---|
 | v0.1 | 17/11/2026 | TV1 | Bản đầu tiên |
 | v0.2 | 17/11/2026 | TV1 | Thêm mục 2 (môi trường, điểm kết nối, biến `.env`); thêm mục 3.1 (kiểm tra schema); thêm topic `sandbox`, ghi chú thứ tự partition và `kafka-init`; mở rộng mục 8 (PostgreSQL): thêm cột `sent_at`, `stage`, `id`, khóa chính, khóa ngoại, ràng buộc CHECK, chỉ mục, quy tắc ghi idempotent; đánh số lại các mục |
+| v0.3 | 24/11/2026 | TV1 | Thêm Spark vào mục 2.1, 2.2; thêm mục 2.4 (quy tắc chạy job Spark, đường dẫn trong container, cấu hình mặc định, checkpoint); quy ước tên cột không trùng từ khóa SQL, tiền tố `kafka_` (mục 1); thêm đường dẫn checkpoint và `infra/spark/` (mục 9); cập nhật mục 10 |
