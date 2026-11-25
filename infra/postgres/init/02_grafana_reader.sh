@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+
+: "${GRAFANA_DB_PASSWORD:?Bien GRAFANA_DB_PASSWORD chua duoc dat}"
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'grafana_reader') THEN
+    CREATE ROLE grafana_reader WITH LOGIN PASSWORD '${GRAFANA_DB_PASSWORD}';
+  ELSE
+    ALTER ROLE grafana_reader WITH LOGIN PASSWORD '${GRAFANA_DB_PASSWORD}';
+  END IF;
+END
+\$\$;
+GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO grafana_reader;
+GRANT USAGE ON SCHEMA public TO grafana_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE ${POSTGRES_USER} IN SCHEMA public
+    GRANT SELECT ON TABLES TO grafana_reader;
+EOSQL

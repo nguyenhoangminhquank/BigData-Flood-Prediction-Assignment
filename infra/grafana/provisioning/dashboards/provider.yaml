@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: flood-dashboards
+    folder: Flood Prediction
+    type: file
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

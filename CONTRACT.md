@@ -89,7 +89,7 @@ Các biến `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` cũng được t
 | `spark.jars.packages` | Hai connector ở mục 2.1 |
 | `spark.jars.ivy` | `/tmp/.ivy2` (volume `spark_ivy`, lưu đệm thư viện đã tải) |
 | `spark.sql.session.timeZone` | `UTC` |
-| `spark.cores.max` | ⏳ Đề xuất `1`: mỗi ứng dụng tối đa 1 nhân để nhiều job chạy song song được; job streaming chính ghi đè bằng `--conf spark.cores.max=2` khi cần (xem mục 10) |
+| `spark.cores.max` | Không đặt: mỗi ứng dụng dùng toàn bộ 2 nhân của worker. **Tại một thời điểm chỉ chạy một ứng dụng trên cụm**; khi cần chạy song song thì ghi đè `--conf spark.cores.max=1` cho từng job |
 
 - Mỗi job gọi `spark.sparkContext.setLogLevel("WARN")` sau khi tạo SparkSession.
 - **Job streaming:** mỗi job có thư mục checkpoint riêng `data/lake/_checkpoints/<tên-job>/`. Offset đã đọc từ Kafka lưu trong checkpoint, không lưu ở consumer group. Xóa checkpoint làm job đọc lại từ đầu topic và **ghi trùng** nếu đích không ghi idempotent: chỉ xóa khi chủ động muốn xử lý lại.
@@ -318,8 +318,6 @@ Thư mục `data/` không đưa lên Git; mỗi thành viên tự đặt file g�
 | 4 | Định dạng file `stations_clean.csv`; sau đó TV1 viết `infra/postgres/init/02_seed_stations.sql` để nạp tự động | TV2 → TV1 | Mốc 1 |
 | 5 | File `common/schemas/sensor_raw.v1.json` (mục 3.1) | TV1 | Bước Producer |
 | 6 | Phiên bản và điểm kết nối Grafana (mục 2) | TV1 | Bước 5 |
-| 7 | Áp dụng `spark.cores.max` (mục 2.4) và số nhân cho job streaming chính | TV1 | Bước 8 |
-
 ---
 
 ## 11. Lịch sử thay đổi
